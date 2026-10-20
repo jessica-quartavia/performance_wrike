@@ -4,6 +4,7 @@ import { readFile, stat } from "node:fs/promises";
 import { dirname, extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import XLSX from "xlsx";
+import { buildAgendaFromWrike, mondayOf, parseISODate, toISODateLocal } from "./lib/agenda-build.mjs";
 
 const rootDir = dirname(fileURLToPath(import.meta.url));
 loadEnv(join(rootDir, ".env"));
@@ -32,7 +33,7 @@ async function carregarPerformance(url) {
   const endpoint = process.env.SUPABASE_FUNCAO_PERFORMANCE_URL?.trim();
   if (!endpoint) return { status: 503, body: { erro: "Configure SUPABASE_FUNCAO_PERFORMANCE_URL no arquivo .env após publicar as Edge Functions." } };
   const remoto = new URL(endpoint);
-  for (const key of ["inicio", "fim", "squad", "pessoa"]) {
+  for (const key of ["inicio", "fim", "squad", "pessoa", "periodo", "todo_periodo"]) {
     const value = url.searchParams.get(key);
     if (value) remoto.searchParams.set(key, value);
   }
@@ -43,9 +44,132 @@ async function carregarPerformance(url) {
   } catch { return { status: 502, body: { erro: "Não foi possível alcançar a função de indicadores do Supabase." } }; }
 }
 
+function enriquecerDiagnosticoPeriodo(body) {
+  if (!body || typeof body !== "object" || body.erro) return body;
+  const status = body.status || [];
+  const somaStatus = status.reduce((acc, row) => acc + (Number(row.quantidade) || 0), 0);
+  const versao2 = Boolean(body.definicoes) || body.meta?.versao_consulta >= 2;
+  const escopo = Number(body.metricas?.total) || 0;
+  return {
+    ...body,
+    meta: {
+      ...(body.meta || {}),
+      diagnostico_periodo: {
+        versao_sql: versao2 ? 2 : 1,
+        escopo,
+        soma_status: somaStatus,
+        coerente_escopo_status: versao2 ? somaStatus === escopo : null,
+        auditoria_itens: (body.auditoria || []).length,
+        squads_com_carga: (body.squads || []).filter((s) => (Number(s.em_andamento) || 0) > 0).length,
+      },
+    },
+  };
+}
+
 async function consultarPerformance(url, response) {
   const resultado = await carregarPerformance(url);
-  return sendJson(response, resultado.status, resultado.body);
+  const body = enriquecerDiagnosticoPeriodo(resultado.body);
+  return sendJson(response, resultado.status, body);
+}
+
+function urlAgendaEntregas() {
+  const dedicada = process.env.SUPABASE_FUNCAO_AGENDA_URL?.trim();
+  if (dedicada) return dedicada;
+  const performance = process.env.SUPABASE_FUNCAO_PERFORMANCE_URL?.trim();
+  if (!performance) return null;
+  return performance.replace(/consultar-performance\/?$/i, "consultar-agenda-entregas");
+}
+
+async function carregarAgenda(url) {
+  const endpoint = urlAgendaEntregas();
+  if (!endpoint) {
+    return { status: 503, body: { erro: "Configure SUPABASE_FUNCAO_AGENDA_URL ou SUPABASE_FUNCAO_PERFORMANCE_URL no .env." } };
+  }
+  const remoto = new URL(endpoint);
+  for (const key of ["segunda", "squad", "pessoa", "apenas_pendentes", "busca", "squad_nome", "pessoa_nome"]) {
+    const value = url.searchParams.get(key);
+    if (value) remoto.searchParams.set(key, value);
+  }
+  try {
+    const resultado = await fetch(remoto, { headers: { Accept: "application/json" } });
+    const body = await resultado.json().catch(() => ({ erro: "Resposta inválida da agenda." }));
+    return { status: resultado.status, body };
+  } catch {
+    return { status: 502, body: { erro: "Não foi possível alcançar a função de agenda do Supabase." } };
+  }
+}
+
+async function buscarPastasPorIds(ids) {
+  const map = new Map();
+  const unicos = [...new Set(ids.filter(Boolean))];
+  for (let inicio = 0; inicio < unicos.length; inicio += 100) {
+    const lote = unicos.slice(inicio, inicio + 100);
+    if (!lote.length) continue;
+    const corpo = await consultarWrike(`/folders/${lote.map(encodeURIComponent).join(",")}`);
+    for (const pasta of corpo.data || []) map.set(pasta.id, pasta.title);
+  }
+  return map;
+}
+
+async function agendaFallbackWrike(url) {
+  const segunda = url.searchParams.get("segunda") || toISODateLocal(mondayOf(new Date()));
+  if (!parseISODate(segunda)) throw new Error("Parâmetro segunda inválido (use AAAA-MM-DD).");
+  const tarefas = await buscarTarefasWrike();
+  const folderPorId = await buscarPastasPorIds(tarefas.flatMap((t) => t.parentIds || []));
+  const idsPessoas = [...new Set(tarefas.flatMap((t) => t.responsibleIds || []))];
+  const contatos = await buscarContatosWrike(idsPessoas);
+  const pessoa = url.searchParams.get("pessoa")?.trim() || "";
+  const squadRaw = url.searchParams.get("squad")?.trim() || "";
+  const squadNome = url.searchParams.get("squad_nome")?.trim() || (/^\d+$/.test(squadRaw) ? "" : squadRaw);
+  return buildAgendaFromWrike({
+    tarefas,
+    contatos,
+    folderPorId,
+    segundaISO: segunda,
+    busca: url.searchParams.get("busca") || "",
+    apenasPendentes: url.searchParams.get("apenas_pendentes") === "1",
+    filtroPessoaId: pessoa,
+    filtroPessoaNome: pessoa ? "" : url.searchParams.get("pessoa_nome") || "",
+    filtroSquadNome: squadNome || url.searchParams.get("squad_nome") || "",
+  });
+}
+
+async function consultarAgenda(url, response) {
+  const edge = await carregarAgenda(url);
+  const edgeOk = edge.status === 200 && edge.body?.meta?.versao_agenda;
+  if (edgeOk) {
+    return sendJson(response, 200, {
+      ...edge.body,
+      meta: { ...edge.body.meta, fonte: edge.body.meta.fonte || "supabase" },
+    });
+  }
+
+  if (!process.env.WRIKE_ACCESS_TOKEN?.trim()) {
+    const status = edge.status >= 400 ? edge.status : 503;
+    return sendJson(response, status, {
+      erro: "Agenda indisponível.",
+      detalhe:
+        edge.body?.erro ||
+        `Integração Supabase retornou HTTP ${edge.status}. Defina WRIKE_ACCESS_TOKEN no .env para fallback com dados reais do Wrike no servidor.`,
+      supabase_status: edge.status,
+    });
+  }
+
+  try {
+    const body = await agendaFallbackWrike(url);
+    body.meta.aviso_integracao =
+      edge.status === 404
+        ? "Edge consultar-agenda-entregas não implantada; dados via API Wrike (servidor)."
+        : edge.body?.erro || `Supabase HTTP ${edge.status}; dados via API Wrike (servidor).`;
+    return sendJson(response, 200, body);
+  } catch (error) {
+    return sendJson(response, 502, {
+      erro: "Agenda indisponível.",
+      detalhe: error instanceof Error ? error.message : "Erro ao montar agenda a partir do Wrike.",
+      supabase_status: edge.status,
+      supabase_erro: edge.body?.erro,
+    });
+  }
 }
 
 function configuracaoWrike() {
@@ -72,7 +196,24 @@ async function consultarWrike(caminho, parametros = {}) {
 async function buscarTarefasWrike() {
   const { espaco, pastas } = configuracaoWrike();
   const tarefas = new Map();
-  const campos = ["customFields", "responsibleIds", "parentIds", "superParentIds", "description", "briefDescription", "metadata", "authorIds", "followerIds", "sharedIds", "dependencyIds", "attachmentCount", "hasAttachments", "subTaskIds", "superTaskIds", "customItemTypeId"];
+  const campos = [
+    "customFields",
+    "responsibleIds",
+    "parentIds",
+    "superParentIds",
+    "description",
+    "briefDescription",
+    "metadata",
+    "authorIds",
+    "followerIds",
+    "sharedIds",
+    "dependencyIds",
+    "attachmentCount",
+    "hasAttachments",
+    "subTaskIds",
+    "superTaskIds",
+    "customItemTypeId",
+  ];
   const escopos = espaco ? [{ caminho: `/spaces/${encodeURIComponent(espaco)}/tasks` }] : pastas.map((pasta) => ({ caminho: `/folders/${encodeURIComponent(pasta)}/tasks` }));
   for (const escopo of escopos) {
     let pagina = "";
@@ -160,6 +301,7 @@ async function servirArquivo(pathname, response) {
 createServer(async (request, response) => {
   const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
   if (request.method === "GET" && url.pathname === "/api/performance") return consultarPerformance(url, response);
+  if (request.method === "GET" && url.pathname === "/api/agenda-entregas") return consultarAgenda(url, response);
   if (request.method === "GET" && url.pathname === "/api/exportar-tarefas.xlsx") return exportarTarefas(url, response);
   if (request.method === "GET") return servirArquivo(url.pathname, response);
   return sendJson(response, 405, { erro: "Método não permitido." });

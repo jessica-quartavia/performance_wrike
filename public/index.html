@@ -7,22 +7,99 @@
     <title>Performance de squads | QuartaVia</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Carme&family=Ubuntu:wght@400;500;700&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=Ubuntu:wght@500;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/styles.css" />
     <link rel="stylesheet" href="/pagination.css" />
   </head>
   <body>
-    <main class="portal-main">
-      <header class="topbar">
-        <div><p class="eyebrow">EXECUÇÃO ESTRATÉGICA</p><h1>Performance de squads</h1><p id="subtitulo" class="note-muted">Conectando execução, fluxo e qualidade do backlog.</p></div>
-        <div class="topbar-actions"><span id="atualizado-em" class="updated-at" aria-live="polite"></span><button id="exportar-xlsx" class="btn btn-ghost" type="button">Exportar tarefas XLSX</button><button id="atualizar" class="btn btn-primary" type="button">Atualizar dados</button></div>
-      </header>
-      <section class="page-filters" aria-label="Filtros do dashboard"><div class="filter-bar">
-        <label>Início<input id="inicio" type="date" /></label><label>Fim<input id="fim" type="date" /></label>
-        <label>Squad ou área<select id="squad"><option value="">Todas</option></select></label><label>Pessoa<select id="pessoa"><option value="">Todas</option></select></label>
-        <div class="filter-actions"><button id="limpar" class="btn btn-ghost" type="button">Limpar filtros</button></div>
-      </div></section>
-      <section id="dashboard" aria-live="polite"><div class="gd-status">Carregando indicadores…</div></section>
-    </main><script type="module" src="/app.js"></script>
+    <div class="app-shell" id="app-shell">
+      <aside class="sidebar" id="sidebar" aria-label="Navegação do dashboard">
+        <div class="sidebar-top">
+          <div class="sidebar-brand">
+            <p class="eyebrow">QuartaVia</p>
+            <strong class="sidebar-title">Performance</strong>
+          </div>
+          <button type="button" id="sidebar-toggle" class="btn btn-ghost btn-icon sidebar-toggle" aria-expanded="true" aria-controls="sidebar" title="Recolher menu">‹</button>
+        </div>
+        <nav class="sidebar-nav">
+          <a href="#" class="nav-link is-active" data-view="performance"><span class="nav-icon" aria-hidden="true">◈</span><span class="nav-text">Visão geral</span></a>
+          <a href="#" class="nav-link" data-view="agenda"><span class="nav-icon" aria-hidden="true">▦</span><span class="nav-text">Agenda</span></a>
+        </nav>
+      </aside>
+      <div class="main-column">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">QUARTAVIA · WRIKE</p>
+            <h1 id="page-title">Performance da equipe</h1>
+            <p id="subtitulo" class="note-muted">Acompanhamento de produtividade, entregas e qualidade operacional.</p>
+          </div>
+          <div class="topbar-actions">
+            <span id="atualizado-em" class="updated-at" aria-live="polite"></span>
+            <button id="exportar-xlsx" class="btn btn-ghost btn-sm" type="button">Exportar XLSX</button>
+            <button id="atualizar" class="btn btn-primary btn-sm" type="button">Atualizar</button>
+          </div>
+        </header>
+        <section id="filtros-host" class="page-filters is-pinned" aria-label="Filtros">
+          <div class="filter-bar">
+            <div id="date-range-root" class="filter-date"></div>
+            <label class="filter-field">Squad / área
+              <select id="squad"><option value="">Todas</option></select>
+            </label>
+            <label class="filter-field">Responsável
+              <select id="pessoa"><option value="">Todos</option></select>
+            </label>
+            <label class="switch-field" title="Manter filtros visíveis ao rolar">
+              <input id="fixar-filtros" type="checkbox" checked />
+              <span class="switch-ui" aria-hidden="true"></span>
+              <span class="switch-label">Fixar filtros</span>
+            </label>
+            <div class="filter-actions">
+              <span id="filtros-ativos" class="filter-badge" hidden>Ativos</span>
+              <button id="limpar" class="btn btn-ghost btn-sm" type="button">Limpar</button>
+            </div>
+          </div>
+        </section>
+        <section id="agenda-filters" class="page-filters agenda-filters" hidden aria-label="Filtros da agenda">
+          <div class="filter-bar agenda-filter-bar">
+            <div class="agenda-week-nav">
+              <button type="button" id="agenda-semana-anterior" class="btn btn-ghost btn-sm">← Semana anterior</button>
+              <button type="button" id="agenda-esta-semana" class="btn btn-primary btn-sm">Esta semana</button>
+              <button type="button" id="agenda-proxima-semana" class="btn btn-ghost btn-sm">Próxima semana →</button>
+            </div>
+            <label class="filter-field">Busca
+              <input id="agenda-busca" type="search" placeholder="Título da tarefa…" />
+            </label>
+            <label class="filter-field">Squad / área
+              <select id="agenda-squad"><option value="">Todas</option></select>
+            </label>
+            <label class="filter-field">Responsável
+              <select id="agenda-pessoa"><option value="">Todos</option></select>
+            </label>
+            <label class="switch-field">
+              <input id="agenda-pendentes" type="checkbox" />
+              <span class="switch-ui" aria-hidden="true"></span>
+              <span class="switch-label">Só pendentes</span>
+            </label>
+            <div class="agenda-view-toggle" role="group" aria-label="Visualização">
+              <button type="button" id="agenda-view-week" class="btn btn-primary btn-sm is-active">Semanal</button>
+              <button type="button" id="agenda-view-list" class="btn btn-ghost btn-sm">Lista</button>
+            </div>
+            <p class="note-muted agenda-filter-note">Independente do filtro de período da visão geral.</p>
+          </div>
+        </section>
+        <main id="dashboard" class="dashboard" aria-live="polite">
+          <div class="loading-state">
+            <div class="skeleton skeleton-title"></div>
+            <div class="skeleton-row">
+              <div class="skeleton skeleton-kpi"></div>
+              <div class="skeleton skeleton-kpi"></div>
+              <div class="skeleton skeleton-kpi"></div>
+            </div>
+            <p class="note-muted">Carregando indicadores…</p>
+          </div>
+        </main>
+      </div>
+    </div>
+    <script type="module" src="/app.js"></script>
   </body>
 </html>

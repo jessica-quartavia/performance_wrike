@@ -8,3 +8,6 @@ verify_jwt = false
 
 [functions.sincronizar-wrike]
 verify_jwt = false
+
+[functions.consultar-agenda-entregas]
+verify_jwt = false

@@ -20,6 +20,12 @@ Configure somente nas Edge Functions: `WRIKE_ACCESS_TOKEN`, `WRIKE_API_HOST`, `W
 
 Para o agendamento, crie no Vault o segredo `performance_wrike_sync_secret` com o mesmo valor de `WRIKE_SYNC_SECRET` das Edge Functions e aplique a segunda migração. Ela chama `sincronizar-wrike` a cada 15 minutos, sem incluir chaves no SQL. O schema `_performance_wrike` continua sem permissões para `anon` e `authenticated`; a única rota pública é `consultar-performance`, que retorna agregados.
 
+## Filtro de período
+
+O recorte temporal é calculado no Postgres (`consultar_performance`). Após alterações, aplique a migração `20261020180000_corrigir_filtro_periodo_consultar_performance.sql` e redeploy de `consultar-performance`. Detalhes em `docs/regras-temporais-kpi.md`.
+
+Atalhos na UI: Todo o período, Hoje, 7/30/90 dias, 6/12 meses, Este mês/ano e intervalo personalizado (popover).
+
 ## Limitações conscientes
 
-Cycle time e gargalos começam a ser medidos após o webhook ser ativado. Bugs críticos e validação de hipóteses aparecem como dependentes de classificação enquanto os campos correspondentes não existirem no Wrike.
+Cycle time e gargalos dependem de histórico via webhook no intervalo. Backlog retroativo usa proxy por datas (sem snapshot diário). Bugs críticos e validação de hipóteses permanecem dependentes de classificação no Wrike.

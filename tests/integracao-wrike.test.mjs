@@ -21,7 +21,10 @@ test("sincronização usa a hierarquia atual e os campos OKR e Itens", () => {
 });
 
 test("interface informa limites de classificação em vez de exibir métricas falsas", () => {
-  assert.match(interfaceCode, /Dependente de um campo de classificação de bugs/);
-  assert.match(interfaceCode, /transições observadas após a ativação do webhook/);
-  assert.match(interfaceCode, /Qualidade e higiene do backlog/);
+  assert.match(interfaceCode, /limitation-banner/);
+  assert.match(interfaceCode, /periodPartialNoticeHtml/);
+  assert.match(interfaceCode, /kpiSubtext/);
+  assert.match(interfaceCode, /Qualidade das tarefas/);
+  assert.match(interfaceCode, /DateRangePicker/);
+  assert.match(interfaceCode, /peopleHeader/);
 });
