@@ -394,7 +394,7 @@ function render(data) {
       <header class="section-head section-head-compact"><h2>Distribuição do trabalho</h2></header>
       <div class="chart-grid">
       <article class="chart-card">
-        <header class="card-heading"><h3>Carga por squad</h3><p class="scope-note">${escapeHtml(sectionSubtext("squads_carga", data))}</p></header>
+        <header class="card-heading"><h3>Carga por squad</h3><p class="scope-note">${escapeHtml(sectionSubtext("squads_carga", data))}${data.meta?.multi_squad ? " · A soma entre squads pode exceder o total quando uma tarefa está em vários boards." : ""}</p></header>
         ${bars(squads.filter((s) => s.em_andamento > 0), metricas.em_andamento, "nome", "em_andamento", "Sem carga em andamento.")}
       </article>
       <article class="chart-card">
@@ -410,7 +410,7 @@ function render(data) {
         ${kpiCard("Sem OKR", (metricas.total || 0) - (metricas.com_okr || 0), kpiSubtext("com_okr", data), kpiOpts("com_okr", data, { highlight: true }))}
       </div>
       <article class="chart-card chart-card-inline">
-        <header class="card-heading"><h3>Cobertura por squad</h3><p class="scope-note">${escapeHtml(sectionSubtext("squads_okr", data))}</p></header>
+        <header class="card-heading"><h3>Cobertura por squad</h3><p class="scope-note">${escapeHtml(sectionSubtext("squads_okr", data))}${data.meta?.multi_squad ? " · Tarefas multi-board entram em cada squad vinculado." : ""}</p></header>
         ${bars(squads.map((item) => ({ nome: item.nome, quantidade: item.cobertura_okr || 0 })), 100, "nome", "quantidade", "—", "%")}
       </article>
     </section>

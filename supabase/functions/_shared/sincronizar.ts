@@ -1,8 +1,22 @@
 import { banco, inserirOuAtualizar } from "./supabase.ts";
+import { buildFolderParentMap, createSquadResolver } from "./squad-resolver.ts";
 import { buscarCampos, buscarContatos, buscarEspacoEFolders, buscarTodasTarefas, buscarWorkflows, itensDoCampo, nomePessoa, padraoStatus } from "./wrike.ts";
 
 const espacoPadrao = "MQAAAAEPMI9l";
 const agora = () => new Date().toISOString();
+
+async function substituirAssociacoesSquads(pares: Array<{ id_item_trabalho: number; id_squad: number }>) {
+  if (!pares.length) return;
+  const idsItem = [...new Set(pares.map((p) => p.id_item_trabalho))];
+  for (let inicio = 0; inicio < idsItem.length; inicio += 150) {
+    const lote = idsItem.slice(inicio, inicio + 150);
+    await banco(`itens_trabalho_squads?id_item_trabalho=in.(${lote.join(",")})`, {
+      method: "DELETE",
+      headers: { Prefer: "return=minimal" },
+    });
+  }
+  await inserirOuAtualizar("itens_trabalho_squads", pares, "id_item_trabalho,id_squad");
+}
 
 export async function sincronizarDados(tipo: "inicial" | "reconciliacao" | "webhook" = "reconciliacao") {
   const idEspaco = Deno.env.get("WRIKE_ESPACO_ID") || espacoPadrao;
@@ -15,7 +29,9 @@ export async function sincronizarDados(tipo: "inicial" | "reconciliacao" | "webh
       id_wrike: folder.id, nome: folder.title || "Sem nome", tipo_grupo: (folder.title || "").trim().toLowerCase().startsWith("squad_") ? "squad" : "area", ativo: true,
     }));
     const squads = await inserirOuAtualizar("squads", grupos, "id_wrike");
-    const porFolder = new Map(squads.map((squad) => [String(squad.id_wrike), Number(squad.id)]));
+    const squadWrikeToDbId = new Map(squads.map((squad) => [String(squad.id_wrike), Number(squad.id)]));
+    const parentOf = buildFolderParentMap(estrutura.root?.id, [...filhosDiretos], estrutura.folders);
+    const resolver = createSquadResolver(squadWrikeToDbId, parentOf);
     const porCampo = new Map(campos.map((campo: { id: string; title?: string }) => [campo.title?.toLowerCase(), campo.id]));
     const idOkr = porCampo.get("okr");
     const idItens = porCampo.get("itens");
@@ -31,10 +47,11 @@ export async function sincronizarDados(tipo: "inicial" | "reconciliacao" | "webh
     }), "id_status_wrike");
     const itens = await inserirOuAtualizar("itens_trabalho", tarefas.map((tarefa) => {
       const camposTarefa = new Map((tarefa.customFields || []).map((campo) => [campo.id, campo.value]));
-      const folder = (tarefa.parentIds || []).find((id) => porFolder.has(id));
+      const squadIds = resolver.resolveTaskSquadIds(tarefa.parentIds);
+      const idSquadLegado = squadIds[0] ?? null;
       const statusPersonalizado = tarefa.customStatusId ? porIdStatus.get(tarefa.customStatusId) : undefined;
       return {
-        id_wrike: tarefa.id, titulo: tarefa.title || "Sem título", link_wrike: tarefa.permalink || null, id_squad: folder ? porFolder.get(folder) : null,
+        id_wrike: tarefa.id, titulo: tarefa.title || "Sem título", link_wrike: tarefa.permalink || null, id_squad: idSquadLegado,
         nome_status: statusPersonalizado?.name || tarefa.status || "Sem status", grupo_status: statusPersonalizado?.group || tarefa.status || "Active", id_status_wrike: tarefa.customStatusId || null,
         itens: itensDoCampo(idItens ? camposTarefa.get(idItens) : undefined), okr: idOkr ? camposTarefa.get(idOkr) || null : null,
         criado_no_wrike_em: tarefa.createdDate || null, inicio_planejado_em: tarefa.dates?.start || null, prazo_em: tarefa.dates?.due || null,
@@ -42,6 +59,15 @@ export async function sincronizarDados(tipo: "inicial" | "reconciliacao" | "webh
       };
     }), "id_wrike");
     const porTarefa = new Map(itens.map((item) => [String(item.id_wrike), Number(item.id)]));
+    const paresSquads: Array<{ id_item_trabalho: number; id_squad: number }> = [];
+    for (const tarefa of tarefas) {
+      const idItem = porTarefa.get(tarefa.id);
+      if (!idItem) continue;
+      for (const idSquad of resolver.resolveTaskSquadIds(tarefa.parentIds)) {
+        paresSquads.push({ id_item_trabalho: idItem, id_squad: idSquad });
+      }
+    }
+    await substituirAssociacoesSquads(paresSquads);
     await banco("responsaveis_itens?ativo=eq.true", { method: "PATCH", body: JSON.stringify({ ativo: false }) });
     const relacoes = tarefas.flatMap((tarefa) => (tarefa.responsibleIds || []).flatMap((idResponsavel) => {
       const idItem = porTarefa.get(tarefa.id); const idPessoa = porResponsavel.get(idResponsavel);
@@ -49,7 +75,7 @@ export async function sincronizarDados(tipo: "inicial" | "reconciliacao" | "webh
     }));
     await inserirOuAtualizar("responsaveis_itens", relacoes, "id_item_trabalho,id_pessoa");
     await banco(`sincronizacoes_wrike?id=eq.${encodeURIComponent(String(idSincronizacao))}`, { method: "PATCH", body: JSON.stringify({ finalizado_em: agora(), itens_lidos: tarefas.length, itens_atualizados: itens.length, resultado: "sucesso" }) });
-    return { itens_lidos: tarefas.length, itens_atualizados: itens.length, grupos: squads.length };
+    return { itens_lidos: tarefas.length, itens_atualizados: itens.length, grupos: squads.length, associacoes_squad: paresSquads.length };
   } catch (error) {
     if (idSincronizacao) await banco(`sincronizacoes_wrike?id=eq.${encodeURIComponent(String(idSincronizacao))}`, { method: "PATCH", body: JSON.stringify({ finalizado_em: agora(), resultado: "erro", detalhe_erro: error instanceof Error ? error.message : "Erro desconhecido" }) }).catch(() => undefined);
     throw error;

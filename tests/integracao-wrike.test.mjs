@@ -18,6 +18,8 @@ test("sincronização usa a hierarquia atual e os campos OKR e Itens", () => {
   assert.match(synchronization, /porCampo\.get\("okr"\)/);
   assert.match(synchronization, /porCampo\.get\("itens"\)/);
   assert.match(synchronization, /mapeamentos_status/);
+  assert.match(synchronization, /resolveTaskSquadIds/);
+  assert.match(synchronization, /itens_trabalho_squads/);
 });
 
 test("interface informa limites de classificação em vez de exibir métricas falsas", () => {
